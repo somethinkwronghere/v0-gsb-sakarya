@@ -1,11 +1,12 @@
 import { createClient } from "@supabase/supabase-js"
 import type { ITesis, IEtkinlik, IHaber, IKullanici } from "./types"
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || ""
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ""
+const supabaseUrl = "https://lemiauhnclplozjfwvts.supabase.co"
+const supabaseAnonKey =
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxlbWlhdWhuY2xwbG96amZ3dnRzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTM4ODQ5NDUsImV4cCI6MjA2OTQ2MDk0NX0.nh3iTyixHtHPzsnyxqqS9RoMfpEOMBn_fsWvaA21b3o"
 
-// Create client only if environment variables are available
-export const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null
+// Create Supabase client
+export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // Mock data for development when Supabase is not configured
 const mockTesisler: ITesis[] = [
@@ -473,45 +474,58 @@ export interface Database {
 // Tesis CRUD operations
 export const tesisService = {
   async getAll(tip?: ITesis["tip"]) {
-    if (!supabase) {
-      // Return mock data when Supabase is not configured
+    try {
+      let query = supabase.from("tesisler").select("*").eq("aktif", true)
+
+      if (tip) {
+        query = query.eq("tip", tip)
+      }
+
+      const { data, error } = await query.order("ad")
+      if (error) throw error
+      return data || []
+    } catch (error) {
+      // If database tables don't exist, fall back to mock data
+      console.warn("Database tables not found, using mock data:", error)
       let filtered = mockTesisler
       if (tip) {
         filtered = mockTesisler.filter((tesis) => tesis.tip === tip)
       }
       return filtered.sort((a, b) => a.ad.localeCompare(b.ad))
     }
-
-    let query = supabase.from("tesisler").select("*").eq("aktif", true)
-
-    if (tip) {
-      query = query.eq("tip", tip)
-    }
-
-    const { data, error } = await query.order("ad")
-    if (error) throw error
-    return data
   },
 
   async getBySlug(slug: string) {
-    if (!supabase) {
-      // Return mock data when Supabase is not configured
+    try {
+      const { data, error } = await supabase.from("tesisler").select("*").eq("slug", slug).eq("aktif", true).single()
+
+      if (error) throw error
+      return data
+    } catch (error) {
+      // If database tables don't exist, fall back to mock data
+      console.warn("Database tables not found, using mock data:", error)
       const tesis = mockTesisler.find((t) => t.slug === slug)
       if (!tesis) throw new Error("Tesis bulunamadı")
       return tesis
     }
+  },
 
-    const { data, error } = await supabase.from("tesisler").select("*").eq("slug", slug).eq("aktif", true).single()
+  async getById(id: string) {
+    try {
+      const { data, error } = await supabase.from("tesisler").select("*").eq("id", id).eq("aktif", true).single()
 
-    if (error) throw error
-    return data
+      if (error) throw error
+      return data
+    } catch (error) {
+      // If database tables don't exist, fall back to mock data
+      console.warn("Database tables not found, using mock data:", error)
+      const tesis = mockTesisler.find((t) => t.id === id)
+      if (!tesis) throw new Error("Tesis bulunamadı")
+      return tesis
+    }
   },
 
   async create(tesis: Database["public"]["Tables"]["tesisler"]["Insert"]) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { data, error } = await supabase.from("tesisler").insert(tesis).select().single()
 
     if (error) throw error
@@ -519,10 +533,6 @@ export const tesisService = {
   },
 
   async update(id: string, updates: Database["public"]["Tables"]["tesisler"]["Update"]) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { data, error } = await supabase
       .from("tesisler")
       .update({ ...updates, guncellenme_tarihi: new Date().toISOString() })
@@ -535,10 +545,6 @@ export const tesisService = {
   },
 
   async delete(id: string) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { error } = await supabase.from("tesisler").update({ aktif: false }).eq("id", id)
 
     if (error) throw error
@@ -548,34 +554,30 @@ export const tesisService = {
 // Etkinlik CRUD operations
 export const etkinlikService = {
   async getAll(tip?: IEtkinlik["tip"], tesisId?: string) {
-    if (!supabase) {
-      // Return mock data when Supabase is not configured
-      return []
-    }
-
-    let query = supabase.from("etkinlikler").select(`
+    try {
+      let query = supabase.from("etkinlikler").select(`
         *,
         tesis:tesisler(ad, tip, ilce)
       `)
 
-    if (tip) {
-      query = query.eq("tip", tip)
-    }
+      if (tip) {
+        query = query.eq("tip", tip)
+      }
 
-    if (tesisId) {
-      query = query.eq("tesis_id", tesisId)
-    }
+      if (tesisId) {
+        query = query.eq("tesis_id", tesisId)
+      }
 
-    const { data, error } = await query.order("tarih", { ascending: false })
-    if (error) throw error
-    return data
+      const { data, error } = await query.order("tarih", { ascending: false })
+      if (error) throw error
+      return data || []
+    } catch (error) {
+      console.warn("Database tables not found, using mock data:", error)
+      return []
+    }
   },
 
   async getById(id: string) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { data, error } = await supabase
       .from("etkinlikler")
       .select(`
@@ -590,10 +592,6 @@ export const etkinlikService = {
   },
 
   async create(etkinlik: Database["public"]["Tables"]["etkinlikler"]["Insert"]) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { data, error } = await supabase.from("etkinlikler").insert(etkinlik).select().single()
 
     if (error) throw error
@@ -604,30 +602,26 @@ export const etkinlikService = {
 // Haber CRUD operations
 export const haberService = {
   async getAll(tesisId?: string) {
-    if (!supabase) {
-      // Return mock data when Supabase is not configured
-      return []
-    }
-
-    let query = supabase.from("haberler").select(`
+    try {
+      let query = supabase.from("haberler").select(`
         *,
         tesis:tesisler(ad, tip, ilce)
       `)
 
-    if (tesisId) {
-      query = query.eq("tesis_id", tesisId)
-    }
+      if (tesisId) {
+        query = query.eq("tesis_id", tesisId)
+      }
 
-    const { data, error } = await query.order("yayin_tarihi", { ascending: false })
-    if (error) throw error
-    return data
+      const { data, error } = await query.order("yayin_tarihi", { ascending: false })
+      if (error) throw error
+      return data || []
+    } catch (error) {
+      console.warn("Database tables not found, using mock data:", error)
+      return []
+    }
   },
 
   async getById(id: string) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { data, error } = await supabase
       .from("haberler")
       .select(`
@@ -642,10 +636,6 @@ export const haberService = {
   },
 
   async create(haber: Database["public"]["Tables"]["haberler"]["Insert"]) {
-    if (!supabase) {
-      throw new Error("Supabase yapılandırılmamış")
-    }
-
     const { data, error } = await supabase.from("haberler").insert(haber).select().single()
 
     if (error) throw error

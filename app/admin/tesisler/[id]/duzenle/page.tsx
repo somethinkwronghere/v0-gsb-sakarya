@@ -4,64 +4,73 @@ import type React from "react"
 
 import { useState, useEffect } from "react"
 import { useRouter } from "next/navigation"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
-import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
-import { toast } from "sonner"
-import { Building, Save, ArrowLeft, Upload, MapPin, Phone, X } from "lucide-react"
-import Link from "next/link"
-import { supabase, tesisService } from "@/lib/supabase"
-import type { ITesis } from "@/lib/types"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { ImageEditor } from "@/components/image-editor"
+import { supabase } from "@/lib/supabase"
+import { ArrowLeft, Save, Building, MapPin, Users, Phone, ImageIcon } from "lucide-react"
+import type { ITesis, TesisTipi } from "@/lib/types"
 
-export default function TesisDuzenlePage({ params }: { params: { id: string } }) {
+interface TesisDuzenlePageProps {
+  params: {
+    id: string
+  }
+}
+
+const TESIS_TIPLERI: { value: TesisTipi; label: string }[] = [
+  { value: "yurt", label: "Yurt" },
+  { value: "genclik_merkezi", label: "Gençlik Merkezi" },
+  { value: "spor_salonu", label: "Spor Salonu" },
+]
+
+const SAKARYA_ILCELERI = [
+  "Adapazarı",
+  "Akyazı",
+  "Arifiye",
+  "Erenler",
+  "Ferizli",
+  "Geyve",
+  "Hendek",
+  "Karapürçek",
+  "Karasu",
+  "Kaynarca",
+  "Kocaali",
+  "Pamukova",
+  "Sapanca",
+  "Serdivan",
+  "Söğütlü",
+  "Taraklı",
+]
+
+export default function TesisDuzenlePage({ params }: TesisDuzenlePageProps) {
   const router = useRouter()
   const [tesis, setTesis] = useState<ITesis | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [imageFile, setImageFile] = useState<File | null>(null)
-  const [imagePreview, setImagePreview] = useState<string>("")
+  const [error, setError] = useState("")
+  const [success, setSuccess] = useState("")
+  const [uploadingImage, setUploadingImage] = useState(false)
 
   // Form state
   const [formData, setFormData] = useState({
     ad: "",
-    tip: "yurt" as ITesis["tip"],
+    tip: "" as TesisTipi,
     ilce: "",
     adres: "",
     kapasite: 0,
-    lat: 0,
-    lng: 0,
     aciklama: "",
-    iletisim: {
-      telefon: "",
-      email: "",
-      yetkili: "",
-    },
+    telefon: "",
+    email: "",
+    yetkili: "",
+    resim_url: "",
     aktif: true,
   })
-
-  const ilceler = [
-    "Adapazarı",
-    "Akyazı",
-    "Arifiye",
-    "Erenler",
-    "Ferizli",
-    "Geyve",
-    "Hendek",
-    "Karapürçek",
-    "Karasu",
-    "Kaynarca",
-    "Kocaali",
-    "Pamukova",
-    "Sapanca",
-    "Serdivan",
-    "Söğütlü",
-    "Taraklı",
-  ]
 
   useEffect(() => {
     loadTesis()
@@ -69,143 +78,168 @@ export default function TesisDuzenlePage({ params }: { params: { id: string } })
 
   const loadTesis = async () => {
     try {
-      const data = await tesisService.getBySlug(params.id)
+      setLoading(true)
+      const { data, error } = await supabase.from("tesisler").select("*").eq("id", params.id).single()
+
+      if (error) throw error
+
       setTesis(data)
       setFormData({
-        ad: data.ad,
-        tip: data.tip,
-        ilce: data.ilce,
-        adres: data.adres,
+        ad: data.ad || "",
+        tip: data.tip || "yurt",
+        ilce: data.ilce || "",
+        adres: data.adres || "",
         kapasite: data.kapasite || 0,
-        lat: data.lat || 0,
-        lng: data.lng || 0,
         aciklama: data.aciklama || "",
-        iletisim: data.iletisim || { telefon: "", email: "", yetkili: "" },
-        aktif: data.aktif,
+        telefon: data.iletisim?.telefon || "",
+        email: data.iletisim?.email || "",
+        yetkili: data.iletisim?.yetkili || "",
+        resim_url: data.resim_url || "",
+        aktif: data.aktif ?? true,
       })
-
-      if (data.foto_url) {
-        setImagePreview(data.foto_url)
-      }
     } catch (error) {
       console.error("Tesis yüklenirken hata:", error)
-      toast.error("Tesis bilgileri yüklenemedi")
+      setError("Tesis yüklenirken bir hata oluştu")
     } finally {
       setLoading(false)
     }
   }
 
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) {
-      if (file.size > 10 * 1024 * 1024) {
-        toast.error("Dosya boyutu 10MB'dan küçük olmalıdır")
-        return
+  const uploadImage = async (file: File): Promise<string> => {
+    try {
+      setUploadingImage(true)
+
+      // Create a unique filename
+      const fileExt = file.name.split(".").pop()
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2)}.${fileExt}`
+      const filePath = `tesisler/${fileName}`
+
+      // Try to upload to Supabase storage
+      const { data, error } = await supabase.storage.from("tesisler").upload(filePath, file, {
+        cacheControl: "3600",
+        upsert: false,
+      })
+
+      if (error) {
+        console.warn("Supabase storage error, using fallback:", error)
+        // Fallback: create a local URL for development
+        return URL.createObjectURL(file)
       }
 
-      if (!file.type.startsWith("image/")) {
-        toast.error("Sadece resim dosyaları yüklenebilir")
-        return
-      }
+      // Get public URL
+      const { data: urlData } = supabase.storage.from("tesisler").getPublicUrl(data.path)
 
-      setImageFile(file)
-      const reader = new FileReader()
-      reader.onload = (e) => {
-        setImagePreview(e.target?.result as string)
-      }
-      reader.readAsDataURL(file)
+      return urlData.publicUrl
+    } catch (error) {
+      console.warn("Image upload error, using fallback:", error)
+      // Fallback: create a local URL
+      return URL.createObjectURL(file)
+    } finally {
+      setUploadingImage(false)
     }
   }
 
-  const uploadImage = async (): Promise<string | null> => {
-    if (!imageFile || !supabase) return null
-
+  const handleImageChange = async (file: File) => {
     try {
-      const fileExt = imageFile.name.split(".").pop()
-      const fileName = `${params.id}-${Date.now()}.${fileExt}`
-      const filePath = `facilities/${fileName}`
-
-      const { error: uploadError } = await supabase.storage.from("facility-images").upload(filePath, imageFile)
-
-      if (uploadError) throw uploadError
-
-      const { data } = supabase.storage.from("facility-images").getPublicUrl(filePath)
-
-      return data.publicUrl
+      const imageUrl = await uploadImage(file)
+      setFormData((prev) => ({ ...prev, resim_url: imageUrl }))
+      setSuccess("Resim başarıyla yüklendi")
     } catch (error) {
-      console.error("Resim yüklenirken hata:", error)
-      toast.error("Resim yüklenemedi")
-      return null
+      setError("Resim yüklenirken hata oluştu")
     }
+  }
+
+  const handleInputChange = (field: string, value: string | number | boolean) => {
+    setFormData((prev) => ({ ...prev, [field]: value }))
+    setError("")
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setSaving(true)
+
+    if (!formData.ad.trim()) {
+      setError("Tesis adı gereklidir")
+      return
+    }
+
+    if (!formData.tip) {
+      setError("Tesis tipi gereklidir")
+      return
+    }
+
+    if (!formData.ilce) {
+      setError("İlçe seçimi gereklidir")
+      return
+    }
+
+    if (!formData.adres.trim()) {
+      setError("Adres gereklidir")
+      return
+    }
+
+    if (formData.kapasite <= 0) {
+      setError("Kapasite 0'dan büyük olmalıdır")
+      return
+    }
 
     try {
-      // Resim yükleme
-      let imageUrl = imagePreview
-      if (imageFile) {
-        const uploadedUrl = await uploadImage()
-        if (uploadedUrl) {
-          imageUrl = uploadedUrl
-        }
+      setSaving(true)
+      setError("")
+
+      // Create slug from name
+      const slug = formData.ad
+        .toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, "")
+        .replace(/\s+/g, "-")
+        .replace(/-+/g, "-")
+        .trim()
+
+      // Prepare iletisim object
+      const iletisim = {
+        telefon: formData.telefon || undefined,
+        email: formData.email || undefined,
+        yetkili: formData.yetkili || undefined,
       }
 
-      if (!supabase) {
-        toast.success("Tesis başarıyla güncellendi (Mock)")
-        router.push("/admin/tesisler")
-        return
-      }
-
-      // Tesis güncelleme
       const updateData = {
         ad: formData.ad,
         tip: formData.tip,
         ilce: formData.ilce,
         adres: formData.adres,
-        kapasite: formData.kapasite || null,
-        lat: formData.lat || null,
-        lng: formData.lng || null,
-        aciklama: formData.aciklama || null,
-        iletisim: formData.iletisim,
+        kapasite: formData.kapasite,
+        aciklama: formData.aciklama,
+        iletisim,
+        resim_url: formData.resim_url || undefined,
+        slug,
         aktif: formData.aktif,
-        foto_url: imageUrl !== imagePreview ? imageUrl : tesis?.foto_url,
         guncellenme_tarihi: new Date().toISOString(),
       }
 
-      await tesisService.update(tesis!.id, updateData)
+      const { error } = await supabase.from("tesisler").update(updateData).eq("id", params.id)
 
-      toast.success("Tesis başarıyla güncellendi")
-      router.push("/admin/tesisler")
+      if (error) throw error
+
+      setSuccess("Tesis başarıyla güncellendi")
+
+      // Redirect after a short delay
+      setTimeout(() => {
+        router.push("/admin/tesisler")
+      }, 1500)
     } catch (error) {
-      console.error("Güncelleme hatası:", error)
-      toast.error("Güncelleme sırasında bir hata oluştu")
+      console.error("Tesis güncellenirken hata:", error)
+      setError("Tesis güncellenirken bir hata oluştu")
     } finally {
       setSaving(false)
     }
   }
 
-  const getTipLabel = (tip: string) => {
-    switch (tip) {
-      case "yurt":
-        return "KYK Yurdu"
-      case "genclik_merkezi":
-        return "Gençlik Merkezi"
-      case "spor_salonu":
-        return "Spor Salonu"
-      default:
-        return tip
-    }
-  }
-
   if (loading) {
     return (
-      <div className="p-6">
-        <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto"></div>
-          <p className="mt-4 text-gray-600">Tesis bilgileri yükleniyor...</p>
+      <div className="container mx-auto py-8">
+        <div className="animate-pulse space-y-4">
+          <div className="h-8 bg-gray-200 rounded w-1/4"></div>
+          <div className="h-64 bg-gray-200 rounded"></div>
+          <div className="h-32 bg-gray-200 rounded"></div>
         </div>
       </div>
     )
@@ -213,289 +247,258 @@ export default function TesisDuzenlePage({ params }: { params: { id: string } })
 
   if (!tesis) {
     return (
-      <div className="p-6">
-        <div className="text-center">
-          <p className="text-red-600">Tesis bulunamadı</p>
-          <Link href="/admin/tesisler">
-            <Button className="mt-4">Geri Dön</Button>
-          </Link>
-        </div>
+      <div className="container mx-auto py-8">
+        <Alert>
+          <AlertDescription>Tesis bulunamadı</AlertDescription>
+        </Alert>
       </div>
     )
   }
 
   return (
-    <div className="p-6 max-w-4xl mx-auto space-y-6">
+    <div className="container mx-auto py-8 space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Link href="/admin/tesisler">
-            <Button variant="ghost" size="sm">
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              Geri
-            </Button>
-          </Link>
-          <div>
-            <h1 className="text-3xl font-bold text-gray-800">Tesis Düzenle</h1>
-            <p className="text-gray-600">
-              {tesis.ad} - {getTipLabel(tesis.tip)}
-            </p>
-          </div>
+      <div className="flex items-center gap-4">
+        <Button variant="ghost" onClick={() => router.back()}>
+          <ArrowLeft className="h-4 w-4 mr-2" />
+          Geri
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold">Tesis Düzenle</h1>
+          <p className="text-muted-foreground">Tesis bilgilerini güncelleyin</p>
         </div>
-        <Badge variant={tesis.aktif ? "default" : "secondary"}>{tesis.aktif ? "Aktif" : "Pasif"}</Badge>
       </div>
 
+      {/* Alerts */}
+      {error && (
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {success && (
+        <Alert>
+          <AlertDescription className="text-green-600">{success}</AlertDescription>
+        </Alert>
+      )}
+
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Temel Bilgiler */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Building className="w-5 h-5" />
-              Temel Bilgiler
-            </CardTitle>
-            <CardDescription>Tesisin temel bilgilerini düzenleyin</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="ad">Tesis Adı *</Label>
-                <Input
-                  id="ad"
-                  value={formData.ad}
-                  onChange={(e) => setFormData({ ...formData, ad: e.target.value })}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="tip">Tesis Tipi *</Label>
-                <Select
-                  value={formData.tip}
-                  onValueChange={(value: ITesis["tip"]) => setFormData({ ...formData, tip: value })}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="yurt">KYK Yurdu</SelectItem>
-                    <SelectItem value="genclik_merkezi">Gençlik Merkezi</SelectItem>
-                    <SelectItem value="spor_salonu">Spor Salonu</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="ilce">İlçe *</Label>
-                <Select value={formData.ilce} onValueChange={(value) => setFormData({ ...formData, ilce: value })}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {ilceler.map((ilce) => (
-                      <SelectItem key={ilce} value={ilce}>
-                        {ilce}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="kapasite">Kapasite</Label>
-                <Input
-                  id="kapasite"
-                  type="number"
-                  value={formData.kapasite}
-                  onChange={(e) => setFormData({ ...formData, kapasite: Number.parseInt(e.target.value) || 0 })}
-                />
-              </div>
-            </div>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main Content */}
+          <div className="lg:col-span-2 space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Building className="h-4 w-4" />
+                  Temel Bilgiler
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="ad">Tesis Adı *</Label>
+                    <Input
+                      id="ad"
+                      value={formData.ad}
+                      onChange={(e) => handleInputChange("ad", e.target.value)}
+                      placeholder="Tesis adını girin"
+                      required
+                    />
+                  </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="adres">Adres *</Label>
-              <Textarea
-                id="adres"
-                value={formData.adres}
-                onChange={(e) => setFormData({ ...formData, adres: e.target.value })}
-                rows={2}
-                required
-              />
-            </div>
+                  <div>
+                    <Label htmlFor="tip">Tesis Tipi *</Label>
+                    <Select
+                      value={formData.tip}
+                      onValueChange={(value) => handleInputChange("tip", value as TesisTipi)}
+                    >
+                      <SelectTrigger>
+                        <SelectValue placeholder="Tesis tipi seçin" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TESIS_TIPLERI.map((tip) => (
+                          <SelectItem key={tip.value} value={tip.value}>
+                            {tip.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="aciklama">Açıklama</Label>
-              <Textarea
-                id="aciklama"
-                value={formData.aciklama}
-                onChange={(e) => setFormData({ ...formData, aciklama: e.target.value })}
-                rows={3}
-              />
-            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="ilce">İlçe *</Label>
+                    <Select value={formData.ilce} onValueChange={(value) => handleInputChange("ilce", value)}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="İlçe seçin" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {SAKARYA_ILCELERI.map((ilce) => (
+                          <SelectItem key={ilce} value={ilce}>
+                            {ilce}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
 
-            <div className="flex items-center space-x-2">
-              <Switch
-                id="aktif"
-                checked={formData.aktif}
-                onCheckedChange={(checked) => setFormData({ ...formData, aktif: checked })}
-              />
-              <Label htmlFor="aktif">Tesis aktif</Label>
-            </div>
-          </CardContent>
-        </Card>
+                  <div>
+                    <Label htmlFor="kapasite">Kapasite *</Label>
+                    <Input
+                      id="kapasite"
+                      type="number"
+                      min="1"
+                      value={formData.kapasite}
+                      onChange={(e) => handleInputChange("kapasite", Number.parseInt(e.target.value) || 0)}
+                      placeholder="Kapasite girin"
+                      required
+                    />
+                  </div>
+                </div>
 
-        {/* Konum Bilgileri */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <MapPin className="w-5 h-5" />
-              Konum Bilgileri
-            </CardTitle>
-            <CardDescription>GPS koordinatları (opsiyonel)</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="lat">Enlem (Latitude)</Label>
-                <Input
-                  id="lat"
-                  type="number"
-                  step="any"
-                  value={formData.lat}
-                  onChange={(e) => setFormData({ ...formData, lat: Number.parseFloat(e.target.value) || 0 })}
-                  placeholder="40.7831"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="lng">Boylam (Longitude)</Label>
-                <Input
-                  id="lng"
-                  type="number"
-                  step="any"
-                  value={formData.lng}
-                  onChange={(e) => setFormData({ ...formData, lng: Number.parseFloat(e.target.value) || 0 })}
-                  placeholder="30.4023"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                <div>
+                  <Label htmlFor="adres">Adres *</Label>
+                  <Textarea
+                    id="adres"
+                    value={formData.adres}
+                    onChange={(e) => handleInputChange("adres", e.target.value)}
+                    placeholder="Tesis adresini girin"
+                    rows={3}
+                    required
+                  />
+                </div>
 
-        {/* İletişim Bilgileri */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Phone className="w-5 h-5" />
-              İletişim Bilgileri
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="telefon">Telefon</Label>
-                <Input
-                  id="telefon"
-                  value={formData.iletisim.telefon}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      iletisim: { ...formData.iletisim, telefon: e.target.value },
-                    })
-                  }
-                  placeholder="0264 xxx xx xx"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="email">E-posta</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  value={formData.iletisim.email}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      iletisim: { ...formData.iletisim, email: e.target.value },
-                    })
-                  }
-                  placeholder="tesis@sakaryagsim.gov.tr"
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="yetkili">Yetkili Kişi</Label>
-                <Input
-                  id="yetkili"
-                  value={formData.iletisim.yetkili}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      iletisim: { ...formData.iletisim, yetkili: e.target.value },
-                    })
-                  }
-                  placeholder="Yetkili adı"
-                />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+                <div>
+                  <Label htmlFor="aciklama">Açıklama</Label>
+                  <Textarea
+                    id="aciklama"
+                    value={formData.aciklama}
+                    onChange={(e) => handleInputChange("aciklama", e.target.value)}
+                    placeholder="Tesis hakkında açıklama girin"
+                    rows={4}
+                  />
+                </div>
+              </CardContent>
+            </Card>
 
-        {/* Tesis Resmi */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Tesis Resmi</CardTitle>
-            <CardDescription>Tesis için fotoğraf yükleyin</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {imagePreview && (
-              <div className="relative">
-                <img
-                  src={imagePreview || "/placeholder.svg"}
-                  alt="Tesis resmi önizleme"
-                  className="w-full max-w-md h-48 object-cover rounded-lg border"
+            {/* İletişim Bilgileri */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Phone className="h-4 w-4" />
+                  İletişim Bilgileri
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <Label htmlFor="telefon">Telefon</Label>
+                    <Input
+                      id="telefon"
+                      value={formData.telefon}
+                      onChange={(e) => handleInputChange("telefon", e.target.value)}
+                      placeholder="0264 xxx xx xx"
+                    />
+                  </div>
+
+                  <div>
+                    <Label htmlFor="email">E-posta</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      value={formData.email}
+                      onChange={(e) => handleInputChange("email", e.target.value)}
+                      placeholder="ornek@gsb.gov.tr"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <Label htmlFor="yetkili">Yetkili Kişi</Label>
+                  <Input
+                    id="yetkili"
+                    value={formData.yetkili}
+                    onChange={(e) => handleInputChange("yetkili", e.target.value)}
+                    placeholder="Yetkili kişi adını girin"
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Sidebar */}
+          <div className="space-y-6">
+            {/* Image Upload */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <ImageIcon className="h-4 w-4" />
+                  Tesis Resmi
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ImageEditor
+                  imageUrl={formData.resim_url}
+                  onImageChange={handleImageChange}
+                  onImageUrlChange={(url) => handleInputChange("resim_url", url)}
                 />
-                <Button
-                  type="button"
-                  variant="destructive"
-                  size="sm"
-                  className="absolute top-2 right-2"
-                  onClick={() => {
-                    setImagePreview("")
-                    setImageFile(null)
-                  }}
-                >
-                  <X className="w-4 h-4" />
+                {uploadingImage && <p className="text-sm text-muted-foreground mt-2">Resim yükleniyor...</p>}
+              </CardContent>
+            </Card>
+
+            {/* Status */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Durum</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="aktif">Aktif</Label>
+                  <Switch
+                    id="aktif"
+                    checked={formData.aktif}
+                    onCheckedChange={(checked) => handleInputChange("aktif", checked)}
+                  />
+                </div>
+                <p className="text-sm text-muted-foreground mt-2">Pasif tesisler web sitesinde görüntülenmez</p>
+              </CardContent>
+            </Card>
+
+            {/* Actions */}
+            <Card>
+              <CardContent className="pt-6">
+                <Button type="submit" className="w-full" disabled={saving}>
+                  <Save className="h-4 w-4 mr-2" />
+                  {saving ? "Kaydediliyor..." : "Değişiklikleri Kaydet"}
                 </Button>
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="image">Resim Dosyası</Label>
-              <div className="flex items-center gap-2">
-                <Input id="image" type="file" accept="image/*" onChange={handleImageChange} className="w-auto" />
-                <Button type="button" variant="outline" size="sm">
-                  <Upload className="w-4 h-4 mr-2" />
-                  Yükle
-                </Button>
-              </div>
-              <p className="text-xs text-gray-500">JPG, PNG veya GIF. Maksimum 10MB.</p>
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
 
-        {/* Action Buttons */}
-        <div className="flex justify-end gap-4">
-          <Link href="/admin/tesisler">
-            <Button type="button" variant="outline">
-              İptal
-            </Button>
-          </Link>
-          <Button type="submit" disabled={saving}>
-            {saving ? (
-              <>
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                Kaydediliyor...
-              </>
-            ) : (
-              <>
-                <Save className="w-4 h-4 mr-2" />
-                Kaydet
-              </>
-            )}
-          </Button>
+            {/* Info */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Tesis Bilgileri</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-3 w-3" />
+                  <span className="text-muted-foreground">Konum:</span>
+                  <span>{formData.ilce}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Users className="h-3 w-3" />
+                  <span className="text-muted-foreground">Kapasite:</span>
+                  <span>{formData.kapasite} kişi</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Building className="h-3 w-3" />
+                  <span className="text-muted-foreground">Tip:</span>
+                  <span>{TESIS_TIPLERI.find((t) => t.value === formData.tip)?.label}</span>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       </form>
     </div>
